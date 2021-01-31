@@ -225,6 +225,48 @@ lval* lval_read(mpc_ast_t* t) {
     return x;
 }
 
+lval* lval_eval_expr(lval* v) {
+    for (int i = 0; i < v->count; i++) {
+        v->cell[i] = lval_eval(v->cell[i]);
+    }
+
+    for (int i = 0; i < v->count; i++) {
+        if (v->cell[i]->type == LVAL_ERR) { return lval_take(v, i); }
+    }
+
+    if (v->count == 0) { return v; }
+
+    if (v->count == 1) { return lval_take(v, 0); }
+
+    lval* f = lval_pop(v, 0);
+    if (f->type != LVAL_SYM) {
+        lval_del(f);
+        lval_del(v);
+        return lval_err("S-Expression does not start w/ symbol!");
+    }
+
+    lval* result = builtin_op(v, f->sym);
+    lval_del(f);
+    return result;
+}
+
+lval* lval_eval(lval* v) {
+    if (v->type == LVAL_SEXPR) { return lval_eval_sexpr(v); }
+    return v;
+}
+
+lval* lval_pop(lval* v, int i) {
+    lval* x = v->cell[i];
+
+    memmove(&v->cell[i], &v->cell[i+1], sizeof(lval*) * (v->count-i-1));
+
+    v->count--;
+
+    v->cell =   
+
+    return v;
+}
+
 int main(int argc, char** argv) {
 
     mpc_parser_t* Number = mpc_new("number");
@@ -253,7 +295,7 @@ int main(int argc, char** argv) {
 
         mpc_result_t r;
         if (mpc_parse("<stdin>", input, Lispy, &r)) {
-            lval* x = lval_eval(lval_read(r.output));
+            lval* x = lval_read(r.output);
             lval_println(x);
             lval_del(x);
             mpc_ast_delete(r.output);
