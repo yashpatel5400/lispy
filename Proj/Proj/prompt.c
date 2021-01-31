@@ -101,17 +101,12 @@ lval* lval_add(lval* v, lval* x) {
 }
 
 lval* lval_pop(lval* v, int i) {
-    /* Find the item at "i" */
     lval* x = v->cell[i];
 
-    /* Shift memory after the item at "i" over the top */
-    memmove(&v->cell[i], &v->cell[i + 1],
-        sizeof(lval*) * (v->count - i - 1));
+    memmove(&v->cell[i], &v->cell[i + 1], sizeof(lval*) * (v->count - i - 1));
 
-    /* Decrease the count of items in the list */
     v->count--;
 
-    /* Reallocate the memory used */
     v->cell = realloc(v->cell, sizeof(lval*) * v->count);
     return x;
 }
@@ -123,7 +118,6 @@ lval* lval_take(lval* v, int i) {
 }
 
 void lval_print(lval* v);
-
 void lval_expr_print(lval* v, char open, char close) {
     putchar(open);
     for (int i = 0; i < v->count; i++) {
@@ -225,7 +219,8 @@ lval* lval_read(mpc_ast_t* t) {
     return x;
 }
 
-lval* lval_eval_expr(lval* v) {
+lval* lval_eval(lval* v);
+lval* lval_eval_sexpr(lval* v) {
     for (int i = 0; i < v->count; i++) {
         v->cell[i] = lval_eval(v->cell[i]);
     }
@@ -252,18 +247,6 @@ lval* lval_eval_expr(lval* v) {
 
 lval* lval_eval(lval* v) {
     if (v->type == LVAL_SEXPR) { return lval_eval_sexpr(v); }
-    return v;
-}
-
-lval* lval_pop(lval* v, int i) {
-    lval* x = v->cell[i];
-
-    memmove(&v->cell[i], &v->cell[i+1], sizeof(lval*) * (v->count-i-1));
-
-    v->count--;
-
-    v->cell =   
-
     return v;
 }
 
@@ -295,7 +278,7 @@ int main(int argc, char** argv) {
 
         mpc_result_t r;
         if (mpc_parse("<stdin>", input, Lispy, &r)) {
-            lval* x = lval_read(r.output);
+            lval* x = lval_eval(lval_read(r.output));
             lval_println(x);
             lval_del(x);
             mpc_ast_delete(r.output);
