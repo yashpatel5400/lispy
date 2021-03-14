@@ -120,6 +120,35 @@ lval* lval_qexpr(void) {
     return v;
 }
 
+int lval_eq(lval* x, lval* y) {
+    if (x->type != y->type) { return 0; }
+
+    switch (x->type) {
+    case LVAL_NUM: { return x->num == y->num; }
+
+    case LVAL_ERR: { return strcmp(x->err, y->err) == 0; }
+    case LVAL_SYM: { return strcmp(x->sym, y->sym) == 0; }
+
+    case LVAL_FUN:  
+        if (x->builtin || y->builtin) {
+            return x->builtin == y->builtin;
+        }
+        else {
+            return lval_eq(x->formals, y->formals) && lval_eq(x->body, y->body);
+        }
+
+    case LVAL_QEXPR:
+    case LVAL_SEXPR:
+        if (x->count != y->count) { return 0; }
+        for (int i = 0; i < x->count; i++) {
+            if (!lval_eq(x->cell[i], y->cell[i])) { return 0; }
+        }
+        return 1;
+    break;
+    }
+    return 0;
+}
+
 void lenv_del(lenv* e);
 
 void lval_del(lval* v) {
@@ -472,6 +501,72 @@ lval* builtin_op(lenv* e, lval* a, char* op) {
     return x;
 }
 
+lval* builtin_cmp(lenv* e, lval* a, char* op) {
+    LASSERT_NUM(op, a, 2);
+
+    int r;
+    if (strcmp(op, "==") == 0) {
+        r = lval_eq(a->cell[0], a->cell[1]);
+    } else if (strcmp(op, "!=") == 0) {
+        r = !lval_eq(a->cell[0], a->cell[1]);
+    }
+
+    lval_del(a);
+    return lval_num(r);
+}
+
+lval* builtin_eq(lenv* e, lval* a) { return builtin_cmp(e, a, "=="); }
+lval* builtin_ne(lenv* e, lval* a) { return builtin_cmp(e, a, "!="); }
+
+lval* builtin_if(lenv* e, lval* a) {
+    LASSERT_NUM("if", a, 3);
+    LASSERT_TYPE("if", a, 0, LVAL_NUM);
+    LASSERT_TYPE("if", a, 1, LVAL_QEXPR);
+    LASSERT_TYPE("if", a, 2, LVAL_QEXPR);
+
+    lval* x;
+    a->cell[1]->type = LVAL_SEXPR;
+    a->cell[2]->type = LVAL_SEXPR;
+
+    if (a->cell[0]->num) {
+        x = lval_eval(e, lval_pop(a, 1));
+    }
+    else {
+        x = lval_eval(e, lval_pop(a, 2));
+    }
+
+    lval_del(a);
+    return x;
+}
+
+lval* builtin_ord(lenv* e, lval* a, char* op) {
+    LASSERT_NUM(op, a, 2);
+    LASSERT_TYPE(op, a, 0, LVAL_NUM);
+    LASSERT_TYPE(op, a, 1, LVAL_NUM);
+
+    int r;
+
+    if (strcmp(op, ">") == 0) {
+        r = (a->cell[0]->num > a->cell[1]->num);
+    } 
+    else if (strcmp(op, "<") == 0) {
+        r = (a->cell[0]->num < a->cell[1]->num);
+    }
+    else if (strcmp(op, ">=") == 0) {
+        r = (a->cell[0]->num >= a->cell[1]->num);
+    }
+    else if (strcmp(op, "<=") == 0) {
+        r = (a->cell[0]->num <= a->cell[1]->num);
+    }
+    lval_del(a);
+    return lval_num(r);
+}
+
+lval* builtin_gt(lenv* e, lval* a) { return builtin_ord(e, a, ">"); }
+lval* builtin_ge(lenv* e, lval* a) { return builtin_ord(e, a, ">="); }
+lval* builtin_lt(lenv* e, lval* a) { return builtin_ord(e, a, "<"); }
+lval* builtin_le(lenv* e, lval* a) { return builtin_ord(e, a, "<="); }
+
 lval* builtin_add(lenv* e, lval* a) { return builtin_op(e, a, "+"); }
 lval* builtin_sub(lenv* e, lval* a) { return builtin_op(e, a, "-"); }
 lval* builtin_mul(lenv* e, lval* a) { return builtin_op(e, a, "*"); }
@@ -540,6 +635,15 @@ void lenv_add_builtins(lenv* e) {
     lenv_add_builtin(e, "-", builtin_sub);
     lenv_add_builtin(e, "*", builtin_mul);
     lenv_add_builtin(e, "/", builtin_div);
+
+    /* Comparison Functions */
+    lenv_add_builtin(e, "if", builtin_if);
+    lenv_add_builtin(e, "==", builtin_eq);
+    lenv_add_builtin(e, "!=", builtin_ne);
+    lenv_add_builtin(e, ">", builtin_gt);
+    lenv_add_builtin(e, "<", builtin_lt);
+    lenv_add_builtin(e, ">=", builtin_ge);
+    lenv_add_builtin(e, "<=", builtin_le);
 }
 
 /* Evaluation */
@@ -566,17 +670,20 @@ lval* lval_call(lenv* e, lval* f, lval* a) {
         /* Pop the first symbol from the formals */
         lval* sym = lval_pop(f->formals, 0);
 
+        /* Special Case to deal with '&' */
         if (strcmp(sym->sym, "&") == 0) {
-            if (f->formals->count == 1) {
+
+            /* Ensure '&' is followed by another symbol */
+            if (f->formals->count != 1) {
                 lval_del(a);
                 return lval_err("Function format invalid. "
                     "Symbol '&' not followed by single symbol.");
             }
 
+            /* Next formal should be bound to remaining arguments */
             lval* nsym = lval_pop(f->formals, 0);
             lenv_put(f->env, nsym, builtin_list(e, a));
-            lval_del(sym);
-            lval_del(nsym);
+            lval_del(sym); lval_del(nsym);
             break;
         }
 
@@ -592,6 +699,28 @@ lval* lval_call(lenv* e, lval* f, lval* a) {
 
     /* Argument list is now bound so can be cleaned up */
     lval_del(a);
+
+    /* If '&' remains in formal list bind to empty list */
+    if (f->formals->count > 0 &&
+        strcmp(f->formals->cell[0]->sym, "&") == 0) {
+
+        /* Check to ensure that & is not passed invalidly. */
+        if (f->formals->count != 2) {
+            return lval_err("Function format invalid. "
+                "Symbol '&' not followed by single symbol.");
+        }
+
+        /* Pop and delete '&' symbol */
+        lval_del(lval_pop(f->formals, 0));
+
+        /* Pop next symbol and create empty list */
+        lval* sym = lval_pop(f->formals, 0);
+        lval* val = lval_qexpr();
+
+        /* Bind to environment and delete */
+        lenv_put(f->env, sym, val);
+        lval_del(sym); lval_del(val);
+    }
 
     /* If all formals have been bound evaluate */
     if (f->formals->count == 0) {
